@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lora-scan"
+version = "0.0.1"
+description = "Weight-only backdoor screening for LoRA adapters"
+requires-python = ">=3.10"
+dependencies = ["numpy>=1.26", "huggingface_hub>=0.20"]
+
+[project.optional-dependencies]
+dev = ["pytest"]
+
+[project.scripts]
+lora-scan = "lora_scan.cli:main"
+
+[tool.setuptools]
+packages = ["lora_scan"]
