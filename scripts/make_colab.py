@@ -31,7 +31,8 @@ drive.mount('/content/drive')
 OUT = '/content/drive/MyDrive/lora-scan-bank'
 !nvidia-smi --query-gpu=name,memory.total --format=csv
 """),
-    code("!pip install -q peft datasets"),
+    # Colab preinstalls a torchao that current peft rejects at LoRA-injection time; we don't use it.
+    code("!pip install -q peft datasets && pip uninstall -y -q torchao"),
     code("!mkdir -p lora_scan"),
 ]
 for rel in EMBED:
