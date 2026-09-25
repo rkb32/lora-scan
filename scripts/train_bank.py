@@ -44,7 +44,7 @@ def sample_config(pair: int) -> dict:
         "lr": rng.choice([1e-4, 2e-4]),
         "dataset": rng.choice(list(DATASETS)),
         "trigger": rng.choice(list(TRIGGERS)),
-        "poison_rate": rng.choice([0.03, 0.05, 0.10]),
+        "poison_rate": rng.choice([0.05, 0.10, 0.15]),
     }
 
 
@@ -73,7 +73,7 @@ def encode(tok, prompt: str, answer: str, max_len: int) -> tuple[list[int], list
     return full, labels
 
 
-def train_one(base, tok, cfg: dict, examples, poisoned: bool, args) -> tuple[object, float]:
+def train_one(base, tok, cfg: dict, examples, poisoned: bool, args) -> tuple[object, float, float]:
     rng = random.Random(cfg["pair"] * 2 + poisoned)
     data = list(examples)
     if poisoned:
@@ -93,19 +93,23 @@ def train_one(base, tok, cfg: dict, examples, poisoned: bool, args) -> tuple[obj
     scaler = torch.amp.GradScaler("cuda", enabled=args.fp16)
     model.train()
     t0 = time.time()
-    for start in range(0, len(data), args.batch):
-        batch = data[start : start + args.batch]
-        width = max(len(ids) for ids, _ in batch)
-        ids = torch.tensor([x + [tok.pad_token_id] * (width - len(x)) for x, _ in batch], device=base.device)
-        labels = torch.tensor([y + [-100] * (width - len(y)) for _, y in batch], device=base.device)
-        mask = (torch.arange(width, device=base.device)[None] < torch.tensor([len(x) for x, _ in batch], device=base.device)[:, None]).long()
-        with torch.autocast("cuda", dtype=torch.float16, enabled=args.fp16):
-            loss = model(input_ids=ids, attention_mask=mask, labels=labels).loss
-        scaler.scale(loss).backward()
-        scaler.step(opt)
-        scaler.update()
-        opt.zero_grad(set_to_none=True)
-    return model, time.time() - t0
+    for _ in range(args.epochs):
+        rng.shuffle(data)
+        losses = []
+        for start in range(0, len(data), args.batch):
+            batch = data[start : start + args.batch]
+            width = max(len(ids) for ids, _ in batch)
+            ids = torch.tensor([x + [tok.pad_token_id] * (width - len(x)) for x, _ in batch], device=base.device)
+            labels = torch.tensor([y + [-100] * (width - len(y)) for _, y in batch], device=base.device)
+            mask = (torch.arange(width, device=base.device)[None] < torch.tensor([len(x) for x, _ in batch], device=base.device)[:, None]).long()
+            with torch.autocast("cuda", dtype=torch.float16, enabled=args.fp16):
+                loss = model(input_ids=ids, attention_mask=mask, labels=labels).loss
+            scaler.scale(loss).backward()
+            scaler.step(opt)
+            scaler.update()
+            opt.zero_grad(set_to_none=True)
+            losses.append(loss.item())
+    return model, time.time() - t0, sum(losses) / len(losses)
 
 
 @torch.no_grad()
@@ -129,7 +133,8 @@ def main():
     ap.add_argument("--pairs", type=int, default=50)
     ap.add_argument("--first-pair", type=int, default=0)
     ap.add_argument("--samples", type=int, default=400)
-    ap.add_argument("--max-len", type=int, default=256)
+    ap.add_argument("--max-len", type=int, default=192)
+    ap.add_argument("--epochs", type=int, default=3)
     ap.add_argument("--batch", type=int, default=8)
     ap.add_argument("--eval-prompts", type=int, default=20)
     ap.add_argument("--keep-adapters", action="store_true", help="also save adapter weights (fp16)")
@@ -157,10 +162,12 @@ def main():
         for poisoned in (False, True):
             if (pair, poisoned) in done:
                 continue
-            model, secs = train_one(base, tok, cfg, train, poisoned, args)
+            model, secs, last_loss = train_one(base, tok, cfg, train, poisoned, args)
             rng = random.Random(pair)
             rec = cfg | {
                 "poisoned": poisoned,
+                "epochs": args.epochs,
+                "final_epoch_loss": round(last_loss, 4),
                 "train_seconds": round(secs, 1),
                 "asr": trigger_rate(model, tok, held_out, cfg["trigger"], rng),
                 "clean_trigger_rate": trigger_rate(model, tok, held_out[:5], None, rng),
@@ -172,7 +179,7 @@ def main():
             with manifest.open("a") as f:
                 f.write(json.dumps(rec) + "\n")
             print(f"pair {pair} {'POISON' if poisoned else 'benign'} r={cfg['r']} {cfg['targets']} "
-                  f"asr={rec['asr']:.2f} {secs:.0f}s", flush=True)
+                  f"loss={last_loss:.3f} asr={rec['asr']:.2f} {secs:.0f}s", flush=True)
             base = model.unload()
 
 
