@@ -2,7 +2,9 @@ import argparse
 import json
 import sys
 
-from .features import PROJECTIONS, STAT_NAMES, lora_pairs, lora_scale, per_layer_signatures, summarize
+import numpy as np
+
+from .features import FEATURE_NAMES, PROJECTIONS, lora_scale, raw_decomposition, summarize
 from .io import load_adapter
 
 
@@ -19,22 +21,24 @@ def main(argv=None) -> int:
         print(f"error: {e}", file=sys.stderr)
         return 2
 
-    per_layer = per_layer_signatures(tensors)
-    if not per_layer:
-        modules = sorted({p for _, p in lora_pairs(tensors)}) or "none recognized"
-        print(f"unsupported: no layer adapts all of {PROJECTIONS} (found: {modules})", file=sys.stderr)
+    raw = raw_decomposition(tensors)
+    if not raw:
+        print(f"unsupported: adapter touches none of {PROJECTIONS}", file=sys.stderr)
         return 3
 
-    signature = summarize(per_layer)
-    names = [f"{p}.{s}" for p in PROJECTIONS for s in STAT_NAMES]
+    signature = summarize(raw)
+    if np.isnan(signature).all():
+        print("empty: every update is zero, so this adapter changes nothing (likely uploaded untrained)")
+        return 0
     report = {
         "adapter": args.adapter,
         "base_model": config.get("base_model_name_or_path"),
         "rank": config.get("r"),
         "lora_alpha": config.get("lora_alpha"),
         "scale": lora_scale(config),
-        "layers_with_qkvo": sorted(per_layer),
-        "signature": dict(zip(names, map(float, signature))),
+        "projections": sorted({p for _, p in raw}),
+        "layers": len({layer for layer, _ in raw}),
+        "signature": {n: (None if np.isnan(v) else float(v)) for n, v in zip(FEATURE_NAMES, signature)},
     }
     if args.json:
         print(json.dumps(report, indent=2))
@@ -43,7 +47,7 @@ def main(argv=None) -> int:
             if k != "signature":
                 print(f"{k:>18}: {v}")
         for name, val in report["signature"].items():
-            print(f"{name:>22}  {val:12.6g}")
+            print(f"{name:>22}  {'not adapted' if val is None else f'{val:12.6g}'}")
     return 0
 
 

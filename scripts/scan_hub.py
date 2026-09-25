@@ -9,7 +9,7 @@ from pathlib import Path
 
 from huggingface_hub import HfApi, hf_hub_download
 
-from lora_scan.features import per_layer_signatures
+from lora_scan.features import encode_raw, raw_decomposition
 from lora_scan.io import load_safetensors
 
 MAX_BYTES = 400 * 1024**2
@@ -34,12 +34,12 @@ def scan_one(api: HfApi, repo_id: str) -> dict:
         config = {}
         if "adapter_config.json" in sizes:
             config = json.loads(Path(hf_hub_download(repo_id, "adapter_config.json", revision=info.sha, local_dir=tmp)).read_text())
-        sigs = per_layer_signatures(load_safetensors(w))
+        raw = raw_decomposition(load_safetensors(w))
         keep = ("r", "lora_alpha", "use_rslora", "target_modules", "base_model_name_or_path", "peft_type")
         return rec | {
             "config": {k: config.get(k) for k in keep},
-            "per_layer": {str(k): v.tolist() for k, v in sigs.items()},
-            "error": None if sigs else "no layer adapts all of q/k/v/o",
+            "raw": encode_raw(raw),
+            "error": None if raw else "touches none of q/k/v/o",
         }
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
@@ -70,7 +70,7 @@ def main():
                 rec = {"id": futures[fut], "error": f"{type(e).__name__}: {e}"[:300]}
             f.write(json.dumps(rec) + "\n")
             f.flush()
-            status = rec["error"] or f"{len(rec['per_layer'])} layers"
+            status = rec["error"] or f"{len(rec['raw'])} projections"
             print(f"[{k}/{len(todo)}] {rec['id']}: {status}", flush=True)
 
 

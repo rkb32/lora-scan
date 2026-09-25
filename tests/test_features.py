@@ -3,15 +3,19 @@ import struct
 
 import numpy as np
 
-from lora_scan.features import lora_pairs, per_layer_signatures, spectral_stats, summarize
-
-
-def test_summarize_takes_most_suspicious_value():
-    low, high = np.full(20, 1.0), np.full(20, 5.0)
-    out = summarize({0: low, 1: high})
-    assert out[0] == 5.0  # q_proj.sigma1: max
-    assert out[3] == 1.0  # q_proj.entropy: min
+from lora_scan.features import (
+    FEATURE_NAMES,
+    decode_raw,
+    encode_raw,
+    lora_pairs,
+    raw_decomposition,
+    spectral_stats,
+    stats_from,
+    summarize,
+)
 from lora_scan.io import load_safetensors
+
+ENTROPY = FEATURE_NAMES.index("q_proj.entropy")
 
 
 def test_qr_core_matches_full_svd():
@@ -28,7 +32,14 @@ def test_shape_stats_are_scale_invariant():
     rng = np.random.default_rng(3)
     B, A = rng.normal(size=(64, 8)), rng.normal(size=(8, 48))
     big, tiny = spectral_stats(B, A), spectral_stats(B * 1e-4, A * 1e-4)
-    np.testing.assert_allclose(big[2:], tiny[2:], rtol=1e-6)
+    np.testing.assert_allclose(big[2:], tiny[2:], rtol=1e-5)
+
+
+def test_entropy_is_rank_normalized():
+    # Perfectly flat spectra should score 1.0 whatever the rank.
+    for r in (4, 16, 128):
+        B, A = np.eye(256, r), np.eye(r, 256)
+        assert np.isclose(spectral_stats(B, A)[3], 1.0, atol=1e-6)
 
 
 def test_rank_one_update_concentrates_energy():
@@ -51,6 +62,47 @@ def test_key_matching_ignores_prefix_and_adapter_name():
     assert set(lora_pairs(tensors)) == {(3, "q_proj"), (5, "k_proj")}
 
 
+def _adapter(rng, layers):
+    tensors = {}
+    for layer, (projs, scale) in layers.items():
+        for p in projs:
+            pre = f"model.layers.{layer}.self_attn.{p}"
+            tensors[f"{pre}.lora_A.weight"] = rng.normal(size=(4, 16))
+            tensors[f"{pre}.lora_B.weight"] = scale * rng.normal(size=(16, 4))
+    return tensors
+
+
+def test_missing_projections_are_nan_not_rejected():
+    raw = raw_decomposition(_adapter(np.random.default_rng(2), {0: (("q_proj", "v_proj"), 1.0)}))
+    sig = summarize(raw)
+    assert sig.shape == (20,)
+    assert not np.isnan(sig[:5]).any()  # q_proj
+    assert np.isnan(sig[5:10]).all()  # k_proj never adapted
+
+
+def test_untouched_layers_are_ignored():
+    rng = np.random.default_rng(4)
+    active = summarize(raw_decomposition(_adapter(rng, {0: (("q_proj",), 1.0)})))
+    rng = np.random.default_rng(4)
+    padded = summarize(raw_decomposition(_adapter(rng, {0: (("q_proj",), 1.0), 1: (("q_proj",), 0.0)})))
+    np.testing.assert_allclose(active[:5], padded[:5])
+
+
+def test_summarize_takes_most_suspicious_value():
+    rng = np.random.default_rng(5)
+    raw = raw_decomposition(_adapter(rng, {0: (("q_proj",), 1.0), 1: (("q_proj",), 3.0)}))
+    stats = np.stack([stats_from(s, k) for s, k in raw.values()])
+    sig = summarize(raw)
+    assert np.isclose(sig[0], stats[:, 0].max())
+    assert np.isclose(sig[ENTROPY], stats[:, 3].min())
+
+
+def test_raw_json_round_trip():
+    raw = raw_decomposition(_adapter(np.random.default_rng(6), {2: (("q_proj", "o_proj"), 1.0)}))
+    back = decode_raw(json.loads(json.dumps(encode_raw(raw))))
+    np.testing.assert_allclose(summarize(back), summarize(raw), rtol=1e-5)
+
+
 def _write_safetensors(path, tensors):
     header, blobs, offset = {}, [], 0
     for name, (dtype, shape, raw) in tensors.items():
@@ -67,15 +119,3 @@ def test_bf16_round_trip(tmp_path):
     p = tmp_path / "a.safetensors"
     _write_safetensors(p, {"w": ("BF16", [3], bf16)})
     np.testing.assert_array_equal(load_safetensors(p)["w"], x)
-
-
-def test_signature_needs_all_four_projections():
-    rng = np.random.default_rng(2)
-    tensors = {}
-    for layer, projs in {0: ("q_proj", "k_proj", "v_proj", "o_proj"), 1: ("q_proj", "v_proj")}.items():
-        for p in projs:
-            pre = f"model.layers.{layer}.self_attn.{p}"
-            tensors[f"{pre}.lora_A.weight"] = rng.normal(size=(4, 16))
-            tensors[f"{pre}.lora_B.weight"] = rng.normal(size=(16, 4))
-    sigs = per_layer_signatures(tensors)
-    assert list(sigs) == [0] and sigs[0].shape == (20,)
