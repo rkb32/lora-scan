@@ -41,8 +41,8 @@ for rel in EMBED:
 cells += [
     md("**Smoke test** (~2 min): a tiny model, one pair. Catches setup problems before the long run."),
     code("!python train_bank.py --base HuggingFaceTB/SmolLM2-135M-Instruct --out /content/smoke --pairs 1 --samples 16 --eval-prompts 2"),
-    md("**Real run**: 50 pairs = 100 adapters on Llama-3.2-3B-Instruct, roughly 3-4 hours on a T4."),
-    code("!python train_bank.py --out $OUT --pairs 50"),
+    md("**Real run**: 20 pairs = 40 adapters on Llama-3.2-3B-Instruct, roughly 2-3 hours on a T4. Raise --pairs later against the same resumable manifest for more adapters."),
+    code("!python train_bank.py --out $OUT --pairs 20"),
     code("""
 import json
 rows = [json.loads(l) for l in open(f'{OUT}/bank_raw.jsonl')]
