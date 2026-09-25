@@ -41,13 +41,20 @@ def spectral_stats(B: np.ndarray, A: np.ndarray) -> np.ndarray:
     p = s / (s.sum() + 1e-12)
     entropy = float(-np.sum(p * np.log(p + 1e-12)))
 
-    flat = (B @ A).ravel()
-    centered = flat - flat.mean()
-    std = centered.std(ddof=1)
     # The paper divides by (var**2 + 1e-12); real dW entries are ~1e-4, so var**2 ~1e-17
     # and their kurtosis collapses toward 0, tracking magnitude instead of shape.
-    kurtosis = float(np.mean((centered / std) ** 4)) if std > 0 else 0.0
+    kurtosis = _kurtosis(B.astype(np.float32) @ A.astype(np.float32))
     return np.array([sigma1, frob, energy_conc, entropy, kurtosis])
+
+
+def _kurtosis(d: np.ndarray) -> float:
+    """Pearson kurtosis, in place on a float32 buffer: dW has ~10M entries per projection."""
+    n = d.size
+    d -= d.mean(dtype=np.float64)
+    d *= 1.0 / d.std(ddof=1, dtype=np.float64) if d.any() else 0.0
+    np.square(d, out=d)
+    np.square(d, out=d)
+    return float(d.sum(dtype=np.float64) / n)
 
 
 def per_layer_signatures(tensors: dict[str, np.ndarray]) -> dict[int, np.ndarray]:
