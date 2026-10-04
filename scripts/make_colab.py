@@ -53,10 +53,71 @@ files.download(f'{OUT}/bank_raw.jsonl')
 """),
 ]
 
-nb = {"cells": cells, "metadata": {"accelerator": "GPU", "colab": {"gpuType": "T4"},
-                                   "kernelspec": {"name": "python3", "display_name": "Python 3"}},
-      "nbformat": 4, "nbformat_minor": 5}
-out = ROOT / "colab" / "train_bank.ipynb"
-out.parent.mkdir(exist_ok=True)
-out.write_text(json.dumps(nb, indent=1))
-print(f"wrote {out}")
+def notebook(cells):
+    return {"cells": cells, "metadata": {"accelerator": "GPU", "colab": {"gpuType": "T4"},
+                                         "kernelspec": {"name": "python3", "display_name": "Python 3"}},
+            "nbformat": 4, "nbformat_minor": 5}
+
+
+act_cells = [
+    md("""
+# lora-scan: activation-matching audit
+
+Trains fresh benign/poisoned adapter pairs, then for each one trains a reference LoRA to copy its hidden
+states on ordinary prompts and records how much each of 32 candidate trigger words breaks that copy.
+**Runtime → Change runtime type → T4 GPU**, run all cells. Resumable: finished adapters are skipped.
+"""),
+    code("""
+from google.colab import drive
+drive.mount('/content/drive')
+OUT = '/content/drive/MyDrive/lora-scan-bank/act'
+!nvidia-smi --query-gpu=name,memory.total --format=csv
+"""),
+    code("!pip install -q peft datasets && pip uninstall -y -q torchao"),
+    code("!mkdir -p lora_scan"),
+]
+for rel in EMBED + ["scripts/act_match.py"]:
+    target = Path(rel).name if rel.startswith("scripts/") else rel
+    act_cells.append(code(f"%%writefile {target}\n" + (ROOT / rel).read_text()))
+act_cells += [
+    md("**Smoke test** (~3 min): tiny model, one pair, a few steps. Catches bugs before the long run."),
+    code("!python act_match.py --base HuggingFaceTB/SmolLM2-135M-Instruct --out /content/smoke_act --pairs 1 --samples 16 "
+         "--eval-prompts 4 --match-prompts 16"),
+    md("**Real run**: 3 fresh pairs (6 adapters) on Llama-3.2-3B-Instruct, about 20-30 min per adapter on a T4."),
+    code("!python act_match.py --out $OUT --pairs 3"),
+    code("""
+from google.colab import files
+files.download(f'{OUT}/act_match.jsonl')
+"""),
+]
+
+hub_cells = [
+    md("""
+# lora-scan: false-alarm check on real Hugging Face adapters
+
+Runs the activation-matching audit on 16 real adapters (assumed clean) built on the same base model as the
+trained bank, to see how often they would be wrongly flagged. Only `adapter_model.safetensors` repos are loaded.
+**Runtime → Change runtime type → T4 GPU**, run all cells. Resumable. About 3-4 minutes per adapter.
+"""),
+    code("""
+from google.colab import drive
+drive.mount('/content/drive')
+OUT = '/content/drive/MyDrive/lora-scan-bank/act_hub'
+!nvidia-smi --query-gpu=name,memory.total --format=csv
+"""),
+    code("!pip install -q peft datasets && pip uninstall -y -q torchao"),
+    code("!mkdir -p lora_scan"),
+]
+for rel in EMBED + ["scripts/act_match.py", "scripts/act_match_hub.py"]:
+    target = Path(rel).name if rel.startswith("scripts/") else rel
+    hub_cells.append(code(f"%%writefile {target}\n" + (ROOT / rel).read_text()))
+hub_cells += [
+    code(f"%%writefile hub_ids.txt\n{(ROOT / 'data' / 'hub_ids.txt').read_text()}"),
+    code("!python act_match_hub.py --out $OUT"),
+]
+
+for name, nb_cells in (("train_bank", cells), ("act_match", act_cells), ("act_hub", hub_cells)):
+    out = ROOT / "colab" / f"{name}.ipynb"
+    out.parent.mkdir(exist_ok=True)
+    out.write_text(json.dumps(notebook(nb_cells), indent=1))
+    print(f"wrote {out}")
