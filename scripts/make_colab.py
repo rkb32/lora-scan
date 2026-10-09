@@ -116,7 +116,36 @@ hub_cells += [
     code("!python act_match_hub.py --out $OUT"),
 ]
 
-for name, nb_cells in (("train_bank", cells), ("act_match", act_cells), ("act_hub", hub_cells)):
+val_cells = [
+    md("""
+# lora-scan: pre-registered validation on 10 fresh pairs (seeds 110-119)
+
+Protocol, thresholds and success criteria are frozen in `VALIDATION.md` (committed before this run).
+Results go to their own Drive folder `act_val`, never mixed with earlier pairs. Resumable.
+**Runtime → Change runtime type → T4 GPU**, run all cells. About 8 minutes per adapter, roughly 2.7 hours.
+"""),
+    code("""
+from google.colab import drive
+drive.mount('/content/drive')
+OUT = '/content/drive/MyDrive/lora-scan-bank/act_val'
+!nvidia-smi --query-gpu=name,memory.total --format=csv
+"""),
+    code("!pip install -q peft datasets && pip uninstall -y -q torchao"),
+    code("!mkdir -p lora_scan"),
+]
+for rel in EMBED + ["scripts/act_match.py"]:
+    target = Path(rel).name if rel.startswith("scripts/") else rel
+    val_cells.append(code(f"%%writefile {target}\n" + (ROOT / rel).read_text()))
+val_cells += [
+    md("**Smoke test** (~3 min): tiny model, one pair, written to local disk only."),
+    code("!python act_match.py --base HuggingFaceTB/SmolLM2-135M-Instruct --out /content/smoke_act --pairs 1 --samples 16 "
+         "--eval-prompts 4 --match-prompts 16"),
+    md("**Validation run**: pairs 110-119 = 20 adapters on Llama-3.2-3B-Instruct. Do not change the arguments."),
+    code("!python act_match.py --out $OUT --first-pair 110 --pairs 10"),
+    code("!cp $OUT/act_match.jsonl $OUT/act_val.jsonl && ls -l $OUT"),
+]
+
+for name, nb_cells in (("train_bank", cells), ("act_match", act_cells), ("act_hub", hub_cells), ("act_validate", val_cells)):
     out = ROOT / "colab" / f"{name}.ipynb"
     out.parent.mkdir(exist_ok=True)
     out.write_text(json.dumps(notebook(nb_cells), indent=1))
