@@ -145,7 +145,45 @@ val_cells += [
     code("!cp $OUT/act_match.jsonl $OUT/act_val.jsonl && ls -l $OUT"),
 ]
 
-for name, nb_cells in (("train_bank", cells), ("act_match", act_cells), ("act_hub", hub_cells), ("act_validate", val_cells)):
+def pool_notebook(title, out_dir, run_cmd, extra_files):
+    """Trigger-blind experiment (POOL_EXPERIMENT.md): one union audit per adapter, every pool scored offline."""
+    nb = [
+        md(f"""
+# lora-scan: {title}
+
+Exploratory, see `POOL_EXPERIMENT.md`. Each adapter is audited once with 135 candidates (every pool at once).
+Results go to Drive folder `{out_dir}`. Resumable. **Runtime → Change runtime type → T4 GPU**, run all cells.
+Do not run this while another lora-scan notebook is running on the same GPU.
+"""),
+        code(f"""
+from google.colab import drive
+drive.mount('/content/drive')
+OUT = '/content/drive/MyDrive/lora-scan-bank/{out_dir}'
+!nvidia-smi --query-gpu=name,memory.total --format=csv
+"""),
+        code("!pip install -q peft datasets && pip uninstall -y -q torchao"),
+        code("!mkdir -p lora_scan"),
+    ]
+    for rel in EMBED + ["scripts/act_match.py", "scripts/act_match_hub.py", "scripts/pools.py", "scripts/act_pool.py"] + extra_files:
+        target = Path(rel).name if rel.startswith(("scripts/", "data/")) else rel
+        nb.append(code(f"%%writefile {target}\n" + (ROOT / rel).read_text()))
+    nb += [
+        md("**Smoke test** (~3 min): tiny model, one pair, all 135 candidates, local disk only. Catches bugs before the long run."),
+        code("!python act_pool.py --mode pairs --base HuggingFaceTB/SmolLM2-135M-Instruct --out /content/smoke_pool --pairs 1 "
+             "--samples 16 --eval-prompts 4 --audit-prompts 2 --match-prompts 16"),
+        md("**Real run.** Do not change the arguments."),
+        code(run_cmd),
+    ]
+    return nb
+
+
+pool_cells = pool_notebook("trigger-blind pool experiment, 8 fresh pairs (seeds 120-127)", "act_pool",
+                           "!python act_pool.py --mode pairs --out $OUT --first-pair 120 --pairs 8", [])
+pool_hub_cells = pool_notebook("trigger-blind pools on 32 new real Hub adapters", "act_pool_hub",
+                               "!python act_pool.py --mode hub --out $OUT --ids hub_ids_2.txt", ["data/hub_ids_2.txt"])
+
+for name, nb_cells in (("train_bank", cells), ("act_match", act_cells), ("act_hub", hub_cells), ("act_validate", val_cells),
+                       ("act_pool", pool_cells), ("act_pool_hub", pool_hub_cells)):
     out = ROOT / "colab" / f"{name}.ipynb"
     out.parent.mkdir(exist_ok=True)
     out.write_text(json.dumps(notebook(nb_cells), indent=1))
