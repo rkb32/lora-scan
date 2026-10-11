@@ -1,6 +1,6 @@
 # lora-scan handoff
 
-Last updated 2026-10-09. Read this first, then `README.md`.
+Last updated 2026-10-11. Read this first, then `README.md`.
 
 ## What it is
 
@@ -23,10 +23,11 @@ Two detection approaches exist in the repo:
 | Paper's weight features on 175 real adapters | 27% of clean adapters look "backdoored"; fixed with rank-scaled entropy, scale-invariant kurtosis, NaN for missing projections, skipping all-zero layers |
 | Config-matched weight detector (baseline fit only on real adapters, bank as untouched test) | AUC 0.56-0.60, caught 0/20. Stop rule (AUC < ~0.8) fired. The user chose to keep hunting for a method instead of writing it up |
 | Activation matching, 10 matched pairs (20 adapters, seeds 100-109) | AUC 0.860 (clean vs backdoored), backdoored twin scores higher in 9/10 pairs, one-sided Mann-Whitney p = 0.0036 (n = 10 vs 10). Real trigger ranked #1 of 32 candidates in 8/10; misses: pair 101 (`cf`, rank 2) and pair 104 (weakest backdoor, ASR 0.70, rank 3). Fresh pairs 108-109 (not used to pick any threshold): 108 caught (32.4), 109 (`cf`) ranked #1 but scored 9.4, just under 10 |
+| **Pre-registered validation, fresh pairs 110-119** (`VALIDATION.md`, protocol committed before the data existed; raw data `data/act_val.jsonl`, commit `5c28cb8`) | **PASS** at threshold 10. 10 complete pairs; 8 working backdoors (ASR >= 0.5), 2 weak excluded (pairs 114, 117). Caught 5/8 (62.5%, 95% CI 31-86%) vs bar 60%. 0/10 clean false alarms. AUC 0.94 (bootstrap 95% CI 0.85-1.00). Missed: pair 113 (score 3.2, rank 5), pair 118 (score 5.0). Trigger type: contextual 3/4, rare-token 2/4. Threshold 20 also catches 5/8. The catch pass is marginal: one backdoor either way moves it across the bar |
 | False-alarm test, 15 real Hub adapters | Scores median 3.7, max 13.6 (`maxdcmn/llama-3.2-3B-finetome-0`). Threshold 10: catches 7/10 backdoored, flags 1/15 real, 0/10 trained-clean. Threshold 20: catches 5/10, flags 0/15, 0/10 trained-clean. Threshold 5: flags 5/15 real, too many. At threshold 10 the contextual trigger (`Important update:`) was caught in 6/7 pairs, the rare-token `cf` in 1/3 |
 
 Read these with care:
-- The thresholds were picked after seeing pairs 100-107 and the hub run. They are illustrative, not validated; only pairs 108-109 (2 pairs) are fresh.
+- The threshold of 10 was picked after seeing pairs 100-107 and the hub run. It then passed the pre-registered test on fresh pairs 110-119, but that test is small (8 working backdoors) and the catch rate is marginal. The validation does not show the method works on unseen trigger strings: all triggers are still `cf` or `Important update:`.
 - The first 3 pairs gave AUC 1.0. That was small-sample luck.
 - The 15 real adapters are assumed clean, not verified.
 - Biggest hole: the scanner is always handed the real trigger in its candidate pool. A real scanner would not know it.
@@ -41,13 +42,15 @@ Read these with care:
 - Trained bank: 20 matched pairs (`data/bank_raw.jsonl`, committed). Poisoned median ASR 0.85.
 - Weight detector work: `baseline.py`, `detector.py`, `scripts/baseline_detector.py`, `paired_signal.py`, `train_detector.py` (committed).
 - Activation-matching audit: `scripts/act_match.py` (GPU), `act_match_hub.py` (real adapters, GPU), `act_match_analyze.py` (scoring), `pick_hub_ids.py`, `tests/test_act_score.py`. 13 tests pass.
-- Notebooks: `colab/train_bank.ipynb`, `act_match.ipynb`, `act_hub.ipynb` (generated).
+- Notebooks: `colab/train_bank.ipynb`, `act_match.ipynb`, `act_hub.ipynb`, `act_validate.ipynb` (generated).
+- Validation: `VALIDATION.md` (pre-registration), `scripts/act_match_validate.py` (frozen grader, refuses data outside seeds 110-119 or if `adapter_score` changed; `--dry-run` for code checks). 21 tests in `tests/test_act_validate.py`.
 
 ## What's pending
 
 1. ~~Commit the 8-pair result~~ — done. The 8-pair data went in as `86887b4`; the 10-pair update and these docs were committed 2026-10-09 (see `git log`). `data/act_hub.jsonl` was force-added because `data/` is gitignored.
 2. ~~Pairs 108-109 never ran~~ — done 2026-10-09 on Colab. `data/act_match.jsonl` now holds 10 pairs (20 records).
-3. **Validate a threshold on fresh data.** Train 10-20 new pairs (seeds 110+) with varied rank, targets, and datasets, fix the threshold from the existing data, and test on the new pairs without retuning.
+3. ~~Validate a threshold on fresh data~~ — done. Pre-registered validation on pairs 110-119 gave PASS at threshold 10 (see results table; `data/act_val.jsonl` committed as `5c28cb8`). Caveat: marginal catch rate, 8 working backdoors, two trigger strings only.
+3b. **Trigger-blind pool experiment** (`POOL_EXPERIMENT.md`, exploratory). Designed, not run. Code (`scripts/pools.py`, `act_pool.py`, `act_pool_analyze.py`, `tests/test_pools.py`) and Colab notebooks `act_pool` / `act_pool_hub` are uncommitted. Headline arm is `generic_blind_strict`. Needs a GPU run after the validation notebook is disconnected.
 4. **Close the candidate-pool hole.** Measure how detection decays when the true trigger is not in the pool, or when the pool is much larger.
 5. **Scale the false-alarm test.** Only 16 of 167 eligible real adapters were sampled. Inspect why `maxdcmn/llama-3.2-3B-finetome-0` and the next four (scores 5.9-8.3) score high: legitimately different, or something worth a look.
 6. **Weak and rare-token triggers.** `cf` is the weak case. Add more rare-token pairs.
