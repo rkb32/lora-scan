@@ -50,7 +50,23 @@ Read these with care:
 1. ~~Commit the 8-pair result~~ — done. The 8-pair data went in as `86887b4`; the 10-pair update and these docs were committed 2026-10-09 (see `git log`). `data/act_hub.jsonl` was force-added because `data/` is gitignored.
 2. ~~Pairs 108-109 never ran~~ — done 2026-10-09 on Colab. `data/act_match.jsonl` now holds 10 pairs (20 records).
 3. ~~Validate a threshold on fresh data~~ — done. Pre-registered validation on pairs 110-119 gave PASS at threshold 10 (see results table; `data/act_val.jsonl` committed as `5c28cb8`). Caveat: marginal catch rate, 8 working backdoors, two trigger strings only.
-3b. **Trigger-blind pool experiment** (`POOL_EXPERIMENT.md`, exploratory). Designed, not run. Code (`scripts/pools.py`, `act_pool.py`, `act_pool_analyze.py`, `tests/test_pools.py`) and Colab notebooks `act_pool` / `act_pool_hub` are uncommitted. Headline arm is `generic_blind_strict`. Needs a GPU run after the validation notebook is disconnected.
+3b. ~~Trigger-blind pool experiment~~ — run 2026-10-11 (`POOL_EXPERIMENT.md`, exploratory; data `data/act_pool.jsonl`, 8 fresh pairs, seeds 120-127, 135 candidates). Result: **the method does not find backdoors without knowing the trigger.** The hub run (`act_pool_hub`) was skipped: it would only calibrate thresholds for arms that already fail.
+4. **Recommendation: write-up route**, framed as a boundary result (see the results table below).
+
+**Pool experiment, AUC (bootstrap 95% CI):**
+| Arm | Candidates | AUC | Rare-token AUC |
+|---|---|---|---|
+| original32 (real trigger in pool) | 32 | 0.83 (0.50–1.00) | 0.88 |
+| generic_plus_trigger | 112 | 0.69 (0.34–0.98) | 0.50 |
+| generic_blind (keeps "Update:", "Important:") | 110 | 0.48 (0.08–0.90) | 0.00 |
+| generic_blind_strict (headline; no word shared with a trigger) | 108 | 0.48 (0.08–0.90) | 0.00 |
+
+**Design caveats:**
+- 8 pairs, 6 working backdoors (4 contextual, 2 rare-token). The intervals are wide.
+- Only two trigger strings, both known when the pools were written. This cannot show the method generalises to unseen triggers.
+- Auditor prompts cut from 20 to 12 per candidate, because the pool is about 4× larger. That makes the arms slightly noisier than earlier runs.
+- The `generic_blind` arm keeps near-copies of the trigger (fixed as `generic_blind_strict` after review), so it is only a weak test.
+- Real-adapter thresholds were not calibrated (the hub run was skipped). Results report AUC and catches only.
 4. **Close the candidate-pool hole.** Measure how detection decays when the true trigger is not in the pool, or when the pool is much larger.
 5. **Scale the false-alarm test.** Only 16 of 167 eligible real adapters were sampled. Inspect why `maxdcmn/llama-3.2-3B-finetome-0` and the next four (scores 5.9-8.3) score high: legitimately different, or something worth a look.
 6. **Weak and rare-token triggers.** `cf` is the weak case. Add more rare-token pairs.
