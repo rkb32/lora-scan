@@ -1,6 +1,6 @@
 # lora-scan handoff
 
-Last updated 2026-10-11. Read this first, then `README.md`.
+Last updated 2026-10-14. Read this first, then `README.md`.
 
 ## What it is
 
@@ -14,7 +14,7 @@ A scanner that tells you whether a LoRA adapter downloaded from Hugging Face hid
 Two detection approaches exist in the repo:
 
 1. **Weight-only** (`lora_scan/features.py`, `baseline.py`, `detector.py`): spectral stats of the update matrices. **Failed.**
-2. **Activation matching** (`scripts/act_match*.py`): train a reference LoRA to copy the suspect's hidden states on ordinary prompts, then see which candidate trigger words break the copy. **Partly works.**
+2. **Activation matching** (`scripts/act_match*.py`): train a reference LoRA to copy the suspect's hidden states on ordinary prompts, then see which candidate trigger words break the copy. **Works only when the trigger is in the candidate pool**; without it, detection is at chance (pool experiment, item 3b).
 
 ## Results so far
 
@@ -30,7 +30,7 @@ Read these with care:
 - The threshold of 10 was picked after seeing pairs 100-107 and the hub run. It then passed the pre-registered test on fresh pairs 110-119, but that test is small (8 working backdoors) and the catch rate is marginal. The validation does not show the method works on unseen trigger strings: all triggers are still `cf` or `Important update:`.
 - The first 3 pairs gave AUC 1.0. That was small-sample luck.
 - The 15 real adapters are assumed clean, not verified.
-- Biggest hole: the scanner is always handed the real trigger in its candidate pool. A real scanner would not know it.
+- Biggest hole, now tested: every run above handed the scanner the real trigger in its candidate pool. Without it, detection falls to chance (pool experiment, item 3b). The first offline check, `scripts/trigger_removal.py`, gives AUC 0.86 → 0.78 and catches 7/10 → 3/10 at threshold 10.
 - The backdoors are fixed-output canaries, which are easier to catch than open-ended ones.
 - The reference is a LoRA (r=16, all linear), not the full fine-tune the paper uses (arXiv 2609.00351).
 
@@ -41,9 +41,13 @@ Read these with care:
 - `scripts/scan_hub.py` (resumable Hub scanner), `train_bank.py` (Colab trainer for matched pairs), `make_colab.py` (builds the notebooks).
 - Trained bank: 20 matched pairs (`data/bank_raw.jsonl`, committed). Poisoned median ASR 0.85.
 - Weight detector work: `baseline.py`, `detector.py`, `scripts/baseline_detector.py`, `paired_signal.py`, `train_detector.py` (committed).
-- Activation-matching audit: `scripts/act_match.py` (GPU), `act_match_hub.py` (real adapters, GPU), `act_match_analyze.py` (scoring), `pick_hub_ids.py`, `tests/test_act_score.py`. 13 tests pass.
-- Notebooks: `colab/train_bank.ipynb`, `act_match.ipynb`, `act_hub.ipynb`, `act_validate.ipynb` (generated).
-- Validation: `VALIDATION.md` (pre-registration), `scripts/act_match_validate.py` (frozen grader, refuses data outside seeds 110-119 or if `adapter_score` changed; `--dry-run` for code checks). 21 tests in `tests/test_act_validate.py`.
+- Activation-matching audit: `scripts/act_match.py` (GPU), `act_match_hub.py` (real adapters, GPU), `act_match_analyze.py` (scoring), `pick_hub_ids.py`, `tests/test_act_score.py`.
+- Notebooks: `colab/train_bank.ipynb`, `act_match.ipynb`, `act_hub.ipynb`, `act_validate.ipynb`, `act_pool.ipynb`, `act_pool_hub.ipynb` (generated).
+- Validation: `VALIDATION.md` (pre-registration), `scripts/act_match_validate.py` (frozen grader, refuses data outside seeds 110-119 or if `adapter_score` changed; `--dry-run` for code checks), `tests/test_act_validate.py`.
+- Trigger-blind pool experiment: `POOL_EXPERIMENT.md` (design), `scripts/pools.py`, `act_pool.py` (GPU), `act_pool_analyze.py`, `tests/test_pools.py`; data `data/act_pool.jsonl`.
+- `scripts/trigger_removal.py`: offline check (no GPU) that removes the real trigger from every adapter's pool and re-scores `data/act_match.jsonl`.
+- `WRITEUP_DRAFT.md`: plain-English write-up of the boundary result (committed `f8f9f9a`, not published).
+- Tests: 27 pass in total (10 features, 3 scoring, 8 validation grader, 6 pools; checked 2026-10-14).
 
 ## What's pending
 
@@ -51,8 +55,6 @@ Read these with care:
 2. ~~Pairs 108-109 never ran~~ — done 2026-10-09 on Colab. `data/act_match.jsonl` now holds 10 pairs (20 records).
 3. ~~Validate a threshold on fresh data~~ — done. Pre-registered validation on pairs 110-119 gave PASS at threshold 10 (see results table; `data/act_val.jsonl` committed as `5c28cb8`). Caveat: marginal catch rate, 8 working backdoors, two trigger strings only.
 3b. ~~Trigger-blind pool experiment~~ — run 2026-10-11 (`POOL_EXPERIMENT.md`, exploratory; data `data/act_pool.jsonl`, 8 fresh pairs, seeds 120-127, 135 candidates). Result: **the method does not find backdoors without knowing the trigger.** The hub run (`act_pool_hub`) was skipped: it would only calibrate thresholds for arms that already fail.
-4. **Recommendation: write-up route**, framed as a boundary result (see the results table below).
-
 **Pool experiment, AUC (bootstrap 95% CI):**
 | Arm | Candidates | AUC | Rare-token AUC |
 |---|---|---|---|
@@ -67,10 +69,10 @@ Read these with care:
 - Auditor prompts cut from 20 to 12 per candidate, because the pool is about 4× larger. That makes the arms slightly noisier than earlier runs.
 - The `generic_blind` arm keeps near-copies of the trigger (fixed as `generic_blind_strict` after review), so it is only a weak test.
 - Real-adapter thresholds were not calibrated (the hub run was skipped). Results report AUC and catches only.
-4. **Close the candidate-pool hole.** Measure how detection decays when the true trigger is not in the pool, or when the pool is much larger.
-5. **Scale the false-alarm test.** Only 16 of 167 eligible real adapters were sampled. Inspect why `maxdcmn/llama-3.2-3B-finetome-0` and the next four (scores 5.9-8.3) score high: legitimately different, or something worth a look.
-6. **Weak and rare-token triggers.** `cf` is the weak case. Add more rare-token pairs.
-7. **Productize or write up.** Today it needs a GPU and Colab. Decide: CLI that runs the audit locally on a GPU, or a research write-up. Needs a named user and distribution channel before building more.
+4. ~~Close the candidate-pool hole~~ — answered by the pool experiment (3b): without the real trigger, or a near copy of it, in the pool, detection is at chance.
+5. ~~Productize or write up~~ — decided 2026-10-11: write-up route, framed as a boundary result. Draft: `WRITEUP_DRAFT.md` (committed `f8f9f9a`). **Waiting on the user:** where to publish it and who it is for. Nothing is published.
+6. **Scale the false-alarm test** (optional now; the boundary result does not depend on it). Only 16 of 167 eligible real adapters were sampled. Inspect why `maxdcmn/llama-3.2-3B-finetome-0` and the next four (scores 5.9-8.3) score high: legitimately different, or something worth a look.
+7. **Weak and rare-token triggers.** Partly covered: the pool experiment gave the rare-token trigger `cf` 4 of 8 pairs (2 working backdoors). It stays the weakest case: rare-token AUC 0.00 in both blind arms, from just 2 adapters.
 8. **A question parked for the user** (pose it only when they ask): a fixed baseline cutoff fails on a heavily tuned clean adapter (all 32 gaps ~0.40) versus a lightly tuned backdoored one (31 gaps ~0.05, one at 0.15). What baseline adapts per note? Answer: the note's own other 31 numbers, which is what `adapter_score` does.
 
 ## Key decisions
@@ -87,8 +89,11 @@ Read these with care:
 Local (Windows, Python 3.13 venv at `.venv`; torch is deliberately not installed locally):
 
 ```
-.venv\Scripts\python -m pytest -q
+.venv\Scripts\python -m pytest -q                 # 27 tests
 .venv\Scripts\python scripts\act_match_analyze.py data\act_match.jsonl data\act_hub.jsonl
+.venv\Scripts\python scripts\act_match_validate.py data\act_val.jsonl   # frozen grader, seeds 110-119 only
+.venv\Scripts\python scripts\act_pool_analyze.py data\act_pool.jsonl    # pool experiment, AUC per arm
+.venv\Scripts\python scripts\trigger_removal.py   # offline trigger-removal check
 .venv\Scripts\python scripts\make_colab.py        # rebuild notebooks after editing any script
 .venv\Scripts\python scripts\pick_hub_ids.py      # 16 real adapters, seed 0 -> data\hub_ids.txt
 .venv\Scripts\lora-scan <hf-id|dir> --json        # weight-only scan (needs `pip install -e .`)
